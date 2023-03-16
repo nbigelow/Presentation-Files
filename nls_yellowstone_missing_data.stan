@@ -1,3 +1,4 @@
+// Function which returns the lotka-volterra equations: Credit to Bob Carpenter
 functions{
  real[] dz_dt(real t, real[] z, real[] theta,real[] x_r, int[] x_i) {
   real x = z[1];
@@ -15,16 +16,16 @@ functions{
 }
 
 data {
-  int N;                    // Length of entire data set
-  int M;                    // Number of predictions
+  int N;                   // Length of entire data set
+  int M;                   // Number of predictions
   real<lower=0> y_init[2]; // Initial values
-  real time[N];           // total time to be integrated
-  real ts_new[M];             // Times of predicted values
+  real time[N];            // total time to be integrated
+  real ts_new[M];          // Times of predicted values
   // Observed Data
   int J;                  // num observations 
-  int tt[J];             // time for obs j
-  real<lower = 0> elk[J];  // 
-  real<lower = 0> wolves[J];  // 
+  int tt[J];              // time for obs j
+  real<lower = 0> elk[J]; // Elk Observations - Nonmissing 
+  real<lower = 0> wolves[J];  //  Wolf Observations - nonmissing
   // Missing Data
   int J_miss;             // num missing observations
   int tm[J_miss];        // missing time for obs j
@@ -33,8 +34,8 @@ data {
 parameters {
   real<lower = 0,upper = 1> theta[4];   // theta = { alpha, beta, gamma, delta }
   real<lower = 0> z_init[2];  // initial population
-  real<lower = 0> elk_missing[J_miss];  //  // missing obs
-  real<lower = 0> wolves_missing[J_miss];  //  // missing obs
+  real<lower = 0> elk_missing[J_miss];  //  // missing obs - elk
+  real<lower = 0> wolves_missing[J_miss];  //  // missing obs - wolves
   real<lower = 0> sigma[2];   // error scale
 }
 
@@ -51,12 +52,12 @@ model {
   z_init[1] ~ lognormal(log(y_init[1]), sigma);
   z_init[2] ~ lognormal(log(y_init[2]), sigma);
 
-  // Liklihood obs
+  // Liklihood of observed values
  for (j in 1:J){
     elk[j] ~ lognormal(log(zz[tt[j], 1]), sigma[1]);
     wolves[j] ~ lognormal(log(zz[tt[j], 2]), sigma[2]);
  }
- // Likelihood missing
+ // Likelihood of missing values
  for(k in 1:J_miss){
    elk_missing[k] ~ lognormal(log(zz[tm[k],1]),sigma[1]);
    wolves_missing[k] ~ lognormal(log(zz[tm[k],2]),sigma[2]);
@@ -65,11 +66,13 @@ model {
 
 generated quantities{
   // Sample from missing values
-  real<lower=0> y_rep_elk_miss[2];
-  real<lower=0> y_rep_wolves_miss[2];
-  real<lower=0> y_rep[J,2];
-  real z_pred[M, 2] = integrate_ode_bdf(dz_dt, zz[N,], time[N], ts_new, theta,rep_array(0.0, 0), rep_array(0, 0),1e-6, 1e-5, 1e10);
+  real<lower=0> y_rep_elk_miss[J_miss]; // Missing Elk observations
+  real<lower=0> y_rep_wolves_miss[J_miss]; // Missing wolf observations
+  real<lower=0> y_rep[J,2];                // Fit Values
   real y_pred[M,2]; // Array of predictions
+  
+  // Use the final observation zz[N,] as the initial value for predicting new values
+  real z_pred[M, 2] = integrate_ode_bdf(dz_dt, zz[N,], time[N], ts_new, theta,rep_array(0.0, 0), rep_array(0, 0),1e-6, 1e-5, 1e10);
   for(l in 1:J_miss){
     y_rep_elk_miss[l] = lognormal_rng(log(elk_missing[l]),sigma[1]);
     y_rep_wolves_miss[l] = lognormal_rng(log(wolves_missing[l]),sigma[2]);

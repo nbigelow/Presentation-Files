@@ -1,0 +1,375 @@
+---
+title: "Modeling Wildlife Populations: Insights from a Predator-Prey Simulation Study"
+author: "Nicholas Bigelow"
+date: "2023-03-17"
+output: 
+  beamer_presentation:
+   theme: "Rochester"
+---
+
+```{r setup, include=FALSE}
+library(rstan)
+# Northern Range Elk Population 1960 - 2018
+elk <- c(8002,5873,NA,NA,4253,NA,3920,3633,4103,5789,
+         7204,8053,9989,10087,12278,11997,12320,12299,10934,NA,
+         NA,16001,NA,NA,NA,16123,17020,19050,16359,14908,
+         12000,12876,17809,19082,NA,NA,13654,11801,11823,14212,
+         13678,12000,9204,8086,9711,NA,6321,6087,7009,6005,
+         4289,4056,3974,NA,4879,4996,5306,7831,5953)
+year <- c(1:length(elk))
+
+# Northern range Wolf Population 1995 - 2018
+wolve <- rep(0,1995-1960)
+wolves <- c(wolve,21,19,32,41,37,65,68,79,98,84,54,
+            76,96,58,40,38,39,34,34,41,50,40,32,39)
+
+# Combine dataframes
+df <- data.frame(year,elk,wolves)
+
+## Modify data to be input to Stan model
+df_sub <- subset(df,df$wolves>0)
+df_sub <- df_sub[-1,] # NA Elk in 1995 so we will use 1996 as starting point & omit 1995
+df_sub$year <- 1:nrow(df_sub)
+
+start <- c(df_sub$elk[1],df_sub$wolves[1]) # Initial values to be input to ODE integration
+df_sub <- df_sub[-1,] # Drop first row as these are initial values 
+df_sub$year <- 1:nrow(df_sub)
+wolves <- df_sub$wolves[!is.na(df_sub$elk)] 
+elk <- df_sub$elk[!is.na(df_sub$elk)]
+
+data = list(N = nrow(df_sub),                               # Total observations
+            M = 30,                                         # Number of forecasts
+            y_init = start,                                 # Initial values to solve ODE's
+            time = 1:(nrow(df_sub)),                        # Total time in consideration for ODE's
+            ts_new = (nrow(df_sub)+1):(nrow(df_sub)+30),    # Time of predicted values
+            J = length(na.omit(df_sub$elk)),                # Number of non-missing observations
+            tt = df_sub$year[!is.na(df_sub$elk)],           # Time of non-missing observations
+            elk = elk,                                      # Historic Elk populations
+            wolves = wolves,                                # Historic Wolf populations
+            J_miss = length(df_sub$elk[is.na(df_sub$elk)]), # Number of missing values
+            tm = df_sub$year[is.na(df_sub$elk)]             # Time of missing values
+            )
+
+model <- stan_model("C:/Users/npbig/OneDrive/Desktop/Presentation/nls_yellowstone_missing_data.stan")
+fit <- sampling(model,data,chains=1,iter=5000)
+```
+
+## Motivation
+
+- Reintroduction of wolves has shifted ecosystem dynamics.
+- Studying the population dynamics between elk and wolves in the Yellowstone ecosystem can provide valuable insights. 
+- Conclusions made can help inform conservation and management strategies for other ecosystems.
+- Forecasts can help ensure populations are behaving as expected.
+
+## Dynamics of the Yellowstone Ecosystem
+
+- Species of interest: Elk and Wolves
+- Specifically northern range herds
+
+![Northern Yellowstone region]("C:/Users/npbig/OneDrive/Desktop/Presentation/northern_region.png")
+
+## Data 
+- Obtained from National Park Service Website
+  - Elk data: https://www.nps.gov/yell/learn/nature/elk.htm
+  - Wolf data: https://www.nps.gov/yell/learn/nature/upload/FINAL-FOR-APPROVAL-WOLF-REPORT-2020_508R.pdf
+  
+# Lotka-Volterra Equations
+## Lotka-Volterra Equations: Introduction 
+
+- Nonlinear differential equations which describe the fluctuating population dynamics of predator and prey
+- Extension of Logistic Growth Model
+
+- $x(t)$ represents the population size of prey at time $t$
+- $y(t)$ represents the population size of predators at time $t$
+
+## Lotka-Volterra Equations: Prey equation
+
+- Prey equation: $\frac{dx}{dt}=\alpha x-\beta x y$
+  - Represents the instantaneous growth rate
+  - x is the population of prey (elk)
+  - y is the population of predators (wolves)
+  - Where $\alpha$ is the exponential growth rate of the prey
+  - Where $\beta$ is the predation rate.
+- Assumptions
+  - The prey population has an unlimited supply of resources. 
+  - Exponential growth in absence of predators. No carrying capacity. 
+
+## Elk Populations in the Absense of predators
+
+```{r,echo=FALSE,warning=FALSE}
+# Plots the historic Northern Elk Herd Populations
+library(ggplot2)
+
+df$yar <- 1960:2018
+ggplot(data=df, aes(x=yar,y=elk))+
+  geom_line()+
+  geom_vline(xintercept = 1995,col='red')+
+  theme_bw()+
+  geom_text(x= 2001, y = 17050,label='Reintroduction of Wolves',col='red')+
+  ggtitle('Northern Herd Elk Population')+
+  xlab('Year')+
+  ylab('Elk Population')+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+## Lotka-Volterra Equations: Predator equation
+
+- Predator equation: $\frac{dy}{dt}=-\gamma y+\delta x y$
+  - Represents the instantaneous growth rate
+  - x is the population of prey (elk).
+  - y is the population of predators (wolves).
+  - Where $\gamma$ is the shrinkage rate of the predator population.
+  - Where $\delta$ is the predator growth rate as a factor of the product of populations.
+- Assumptions
+  - The food supply of the predator population depends entirely on the size of the prey population.
+  - The rate of predation on the prey is assumed to be proportional to the rate at which the predators and the prey meet.
+
+# Parameter Estimation
+## Potential Approaches
+
+- $\frac{dx}{dt}=\alpha x - \beta xy$
+- $\frac{dx}{dt}=-\gamma y + \delta xy$
+- Need to estimate: $\alpha,\beta,\gamma,\delta$
+
+1. Nonlinear Least Squares
+2. Bayesian Approximation 
+
+## Bayesian Approximation: Quick Example
+- Example
+  - Likelihood: $p(y_1,...,y_n|\lambda) \sim$ Poisson($\lambda$)
+  - Prior: $p(\lambda) \sim$ Gamma($\alpha_0,\beta_0$)
+  - Posterior: $p(\lambda|y_1,..,y_n) = \frac{p(y_1,...,y_n|\lambda)*p(\lambda)}{p(y_1,...,y_n)}$
+- Our case
+  - $p(\alpha,\beta,\gamma,\delta|y_{[1,k]},...,y_{[n,k]})$
+
+## Bayesian Approximation: Likelihood & Priors
+
+- Likelihood: 
+  - $y_{n,k} \sim$ lognormal($log(z_{n,k}), \sigma_k$)
+- Priors
+  - $\alpha,\gamma \sim$ Beta(1,1) 
+  - $\beta, \delta \sim$ Beta(1,5)
+
+## Prior Predictive Checks 
+
+```{r,echo=FALSE}
+# Plots histograms of the specified prior distributions for our parameters
+## Obtain simulated values
+set.seed(57)
+priors <- rbeta(1000,1,1) # Alpha & Gamma priors
+beta_delta_priors <- (rbeta(1000,1,5)) # Beta & Delta priors
+sigma_prior <- rgamma(1000,1,5)       
+likelihood <- rlnorm(1000,log(13000),sample(sigma_prior,1))
+# Display plots
+par(mfrow=c(2,2))
+hist(priors,col = 'blue',main = 'Alpha & Gamma Priors',xlab = 'Intrinsic Growth/Death Rates',breaks='fd')
+hist(beta_delta_priors,col = 'blue',main = 'Beta & Delta Priors',xlab = 'Interaction Coefficients',breaks='fd')
+hist(sigma_prior,col = 'orange',main = 'Sigma Prior',breaks='fd')
+hist(likelihood,col = 'orange',main='Likelihood',xlab='Elk/Wolves',breaks='fd')
+```
+
+## Posterior Convergence Check
+
+![Posterior Traceplots]("C:/Users/npbig/OneDrive/Desktop/Presentation/traceplot.png")
+
+## Checking Model Fit: Elk
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE}
+library(dplyr)
+## Data Manipulation to extract fit values
+elk_fit <- wolf_fit <- data.frame(matrix(nrow = data$J, ncol = 3))
+names(elk_fit) <- names(wolf_fit) <- c("Estimate",'Lower Limit','Upper Limit')
+for(i in 1:data$J){
+  z_1 <- paste("y_rep[",i,',1]',sep = '')
+  z_2 <- paste("y_rep[",i,',2]',sep = '')
+  elk_fit[i,1] <- mean(extract(fit,z_1)[[1]])  # Estimate - Elk
+  elk_fit[i,2] <- quantile(extract(fit,z_1)[[1]], 0.025) # Lower 95% CI - Elk
+  elk_fit[i,3] <- quantile(extract(fit,z_1)[[1]], 0.975) # Upper 95% CI - Elk
+  wolf_fit[i,1] <- mean(extract(fit,z_2)[[1]]) # Estimate - Wolf
+  wolf_fit[i,2] <- quantile(extract(fit,z_2)[[1]], 0.025) # Lower 95% CI - Wolf  
+  wolf_fit[i,3] <- quantile(extract(fit,z_2)[[1]], 0.975) # Upper 95% CI - Wikf
+}
+# Data Manipulation to extract fit missing vales
+elk_miss <- wolf_miss <- data.frame(matrix(nrow = data$J_miss, ncol = 3))
+names(elk_miss) <- names(wolf_miss) <- c("Estimate",'Lower Limit','Upper Limit')
+for(i in 1:data$J_miss){
+  z_1 <- paste("y_rep_elk_miss[",i,']',sep = '')
+  z_2 <- paste("y_rep_wolves_miss[",i,']',sep = '')
+  elk_miss[i,1] <- mean(extract(fit,z_1)[[1]]) # Estimate - Elk 
+  elk_miss[i,2] <- quantile(extract(fit,z_1)[[1]], 0.025)  # Lower 95% CI - Elk
+  elk_miss[i,3] <- quantile(extract(fit,z_1)[[1]], 0.975)  # Upper 95% CI - Elk 
+  wolf_miss[i,1] <- mean(extract(fit,z_2)[[1]]) # Estimate - Wolves
+  wolf_miss[i,2] <- quantile(extract(fit,z_2)[[1]], 0.025) # Lower 95% CI - Wolf
+  wolf_miss[i,3] <- quantile(extract(fit,z_2)[[1]], 0.975)# Upper 95% CI - Wolf
+}
+
+# Bind the missing estimates with the non-missing estimates for elk at correct time
+fit_data <- cbind(data$tt,elk_fit)
+fit_data_missing <- cbind(data$tm,elk_miss)
+names(fit_data) <- names(fit_data_missing) <- c('Time',"Estimate",'Lower Limit','Upper Limit')
+fit_data_elk <- rbind(fit_data,fit_data_missing)
+fit_data_elk <- fit_data_elk[order(fit_data_elk[,1]),]
+
+plot_df <- data.frame(data$tt,data$elk)
+plot_df$year <- c(1997:2004,2006:2012,2014:2018)
+fit_data_elk$Year <- 1997:2018
+```
+
+```{r,echo=FALSE,fig.align='center',warning=FALSE}
+# Plotting fitted values for Elk populations
+ggplot(data = plot_df,aes(x=year,y=data.elk,color='black'))+
+  geom_point()+
+  geom_point(data=fit_data_elk, aes(x=Year,y=Estimate,color='red'))+
+  geom_line(data = fit_data_elk,aes(x=Year,y=`Lower Limit`,color='blue'))+
+  geom_line(data = fit_data_elk,aes(x=Year,y=`Upper Limit`,color='blue2'))+
+  scale_color_manual(name = "", values = c("black" = "black", "red" = "red", "blue2" = "blue", "blue" = "blue"), labels = c("Observation","Lower Limit", "Upper Limit", "Estimate")) +
+  theme_bw() +
+  labs(y='Yellowstone Elk Population (Northern Herd)',x='Year',title = 'Elk Fit Values')+
+  theme(legend.position="right",plot.title = element_text (hjust = 0.5))
+```
+
+## Checking Model Fit: Wolves
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+# Plotting fitted values for the Wolf populations
+fit_data <- cbind(data$tt,wolf_fit)
+fit_data_missing <- cbind(data$tm,wolf_miss)
+names(fit_data) <- names(fit_data_missing) <- c('Time',"Estimate",'Lower Limit','Upper Limit')
+fit_data_elk <- rbind(fit_data,fit_data_missing)
+fit_data_elk <- fit_data_elk[order(fit_data_elk[,1]),]
+
+s <-(df$wolves[df$wolves>1])
+s <- s[-1]; s <- s[-1]
+plot_df <- data.frame(1997:2018,s)
+plot_df$year <- c(1997:2018)
+fit_data_elk$Year <- 1997:2018
+ggplot(data = plot_df,aes(x=year,y=s,color='black'))+
+  geom_point()+
+  geom_point(data=fit_data_elk, aes(x=Year,y=Estimate,color='red'))+
+  geom_line(data = fit_data_elk,aes(x=Year,y=`Lower Limit`,color='blue'))+
+  geom_line(data = fit_data_elk,aes(x=Year,y=`Upper Limit`,color='blue2'))+
+  scale_color_manual(name = "", values = c("black" = "black", "red" = "red", "blue2" = "blue", "blue" = "blue"), labels = c("Observation","Lower Limit", "Upper Limit", "Estimate")) +
+  theme_bw() +
+  labs(y='Yellowstone Wolf Population (Northern Herd)',x='Year',title = 'Wolf Fit Values')+
+  theme(legend.position="right",plot.title = element_text (hjust = 0.5))
+```
+
+# Forecasts & Inference
+
+## Estimated Parameters
+```{r,echo=FALSE,warning=FALSE,message=FALSE}
+# Extracting parameters of interest from fit model
+library(pander)
+alpha <- extract(fit,'theta[1]')[[1]]
+gamma <- extract(fit,'theta[3]')[[1]]
+beta <- extract(fit,'theta[2]')[[1]]
+delta <- extract(fit,'theta[4]')[[1]]
+sigma_elk <- extract(fit,'sigma[1]')[[1]]
+sigma_wolves <- extract(fit,'sigma[2]')[[1]]
+
+# Converting parameters to data frame to be output as a pander table
+a<-rbind(c(mean(alpha),sd(alpha),quantile(alpha,0.025),quantile(alpha,0.975)))
+b<-rbind(c(mean(beta),sd(beta),quantile(beta,0.025),quantile(beta,0.975)))
+c<-rbind(c(mean(gamma),sd(gamma),quantile(gamma,0.025),quantile(gamma,0.975)))
+d<-rbind(c(mean(delta),sd(delta),quantile(delta,0.025),quantile(delta,0.975)))
+e<-rbind(c(mean(sigma_elk),sd(sigma_elk),quantile(sigma_elk,0.025),quantile(sigma_elk,0.975)))
+f<-rbind(c(mean(sigma_wolves),sd(sigma_wolves),quantile(sigma_wolves,0.025),quantile(sigma_wolves,0.975)))
+table<-rbind(a,b,c,d,e,f)
+table <- round(table,3)
+rownames(table) <- c('$\\alpha$','$\\beta$','$\\gamma$','$\\delta$','$\\sigma_{elk}$','$\\sigma_{wolves}$')
+colnames(table) <- c('Estimate','S.E.','Lower 95% CI','Upper 95% CI')
+pander(table)
+```
+
+## Parameter Estimation: Visualization
+
+```{r,echo=FALSE}
+# Histograms of the parameters of interest
+par(mfrow=c(2,2))
+hist(alpha,col = 'blue',main = 'Alpha Parameter',xlab = 'Alpha',breaks = 'fd')
+hist(beta,col = 'orange',main = 'Beta Parameter',xlab = 'Beta',breaks = 'fd')
+hist(gamma,col = 'blue',main = 'Gamma Parameter',xlab = 'Gamma',breaks = 'fd')
+hist(delta,col = 'orange',main = 'Delta Parameter',xlab = 'Delta',breaks = 'fd')
+```
+
+## Joint Relationship
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+# Visualizing the joint relationship between the solutions of the lotka-volterra equations
+all_vals <- data.frame(matrix(ncol = 2,nrow = 20 ))
+for(i in 1:data$J){
+  z_1 <- paste("zz[",i,',1]',sep = '')
+  z_2 <- paste("zz[",i,',2]',sep = '')
+  all_vals[i,1] <- mean(extract(fit,z_1)[[1]])
+  all_vals[i,2] <- mean(extract(fit,z_2)[[1]])
+}
+ggplot(data = all_vals,aes(x=X1,y=X2))+geom_point(col='black')+
+  theme_bw()+
+  labs(x='Elk Population',y='Wolf Population',title='Population Joint Relationship')+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+## Forecasts: Elk
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+# Data manipulation to obtain dataframes for forecasted values 
+elk_preds <- wolf_preds <- data.frame(matrix(nrow = data$M, ncol = 3))
+names(elk_preds) <- names(wolf_preds) <- c("Estimate",'Lower Limit','Upper Limit')
+for(i in 1:data$M){
+  z_1 <- paste("y_pred[",i,',1]',sep = '')
+  z_2 <- paste("y_pred[",i,',2]',sep = '')
+  elk_preds[i,1] <- mean(extract(fit,z_1)[[1]]) 
+  elk_preds[i,2] <- quantile(extract(fit,z_1)[[1]], 0.025) 
+  elk_preds[i,3] <- quantile(extract(fit,z_1)[[1]], 0.975) 
+  wolf_preds[i,1] <- mean(extract(fit,z_2)[[1]])
+  wolf_preds[i,2] <- quantile(extract(fit,z_2)[[1]], 0.025) 
+  wolf_preds[i,3] <- quantile(extract(fit,z_2)[[1]], 0.975)
+}
+elk_preds$Year <- wolf_preds$Year <- 2019:((2019+data$M)-1)
+```
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+# Visualize Elk forecasts
+ggplot(data = elk_preds, aes(x = Year, y = Estimate, color = "Estimate")) +
+  geom_line() +
+  geom_line(data = elk_preds, aes(x = Year, y = `Lower Limit`, color = "Lower Limit")) +
+  geom_line(data = elk_preds, aes(x = Year, y = `Upper Limit`, color = "Upper Limit")) +
+  labs(y = 'Forecasted Elk Population') +
+  scale_color_manual(name ="", values = c("red", "blue", "blue"),
+                     labels = c("Forecast", "Lower Limit", "Upper Limit"))+ggtitle('Forecasted Northern Elk Herd Population')+
+  theme(legend.position="right",plot.title = element_text (hjust = 0.5))+
+  theme_bw()
+```
+
+## Forecasts: Wolves
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+# Visualize Wolf forecasts
+ggplot(data = wolf_preds, aes(x = Year, y = Estimate, color = "Estimate")) +
+  geom_line() +
+  geom_line(data = wolf_preds, aes(x = Year, y = `Lower Limit`, color = "Lower Limit")) +
+  geom_line(data = wolf_preds, aes(x = Year, y = `Upper Limit`, color = "Upper Limit")) +
+  labs(y = 'Forecasted Wolf Population') +
+  scale_color_manual(name ="", values = c("red", "blue", "blue"),
+                     labels = c("Forecast", "Lower Limit", "Upper Limit"))+ggtitle('Forecasted Northern Wolf Herd Population')+
+  theme(legend.position="right",plot.title = element_text (hjust = 0.5))+
+  theme_bw()
+```
+
+## Conclusions
+
+- Expect the elk population to peak in 2027 - 2029.
+- Expect the wolf population to peak in 2031 - 2033.
+- Expect the intrinsic growth rate of elk to be between 0.10 to 0.32
+  - Estimated to be 0.20.
+- Positive $\beta$ coefficient. 
+- Expected intrinsic shrinkage rate of wolves to be between 0.18 to 0.38
+  - Estimated to be 0.27.
+- $\delta$ < $\beta$
+
+## Limitations & Considerations
+
+- Limited to only elk & wolf populations.
+- How would our estimates vary if we used uninformative priors? 
+- Instead of considering elk_missing as a random variable we could condition it on the number of wolves.
+- Instead of the continuous lognormal likelihood we could try the discrete possion likelihood.
